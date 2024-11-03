@@ -288,7 +288,7 @@ fn usize_conversion(e: std::num::TryFromIntError) -> Error {
     Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
+impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
     type Error = Error;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value>
@@ -575,7 +575,7 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
     }
 }
 
-impl<'de, 'a, R: Read> de::SeqAccess<'de> for &'a mut Deserializer<R> {
+impl<'de, R: Read> de::SeqAccess<'de> for &mut Deserializer<R> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
@@ -590,7 +590,7 @@ impl<'de, 'a, R: Read> de::SeqAccess<'de> for &'a mut Deserializer<R> {
     }
 }
 
-impl<'de, 'a, R: Read> de::MapAccess<'de> for &'a mut Deserializer<R> {
+impl<'de, R: Read> de::MapAccess<'de> for &mut Deserializer<R> {
     type Error = Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>>
@@ -605,11 +605,11 @@ impl<'de, 'a, R: Read> de::MapAccess<'de> for &'a mut Deserializer<R> {
         V: de::DeserializeSeed<'de>,
     {
         self.next_element_seed(seed)
-            .and_then(|opt| opt.ok_or_else(|| Error::Empty))
+            .and_then(|opt| opt.ok_or(Error::Empty))
     }
 }
 
-impl<'de, 'a, R: Read> de::EnumAccess<'de> for &'a mut Deserializer<R> {
+impl<'de, R: Read> de::EnumAccess<'de> for &mut Deserializer<R> {
     type Error = Error;
     type Variant = Self;
 
@@ -622,7 +622,7 @@ impl<'de, 'a, R: Read> de::EnumAccess<'de> for &'a mut Deserializer<R> {
     }
 }
 
-impl<'de, 'a, R: Read> de::VariantAccess<'de> for &'a mut Deserializer<R> {
+impl<'de, R: Read> de::VariantAccess<'de> for &mut Deserializer<R> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<()> {

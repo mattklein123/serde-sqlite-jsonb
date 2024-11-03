@@ -279,7 +279,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 }
 
-impl<'a> ser::SerializeSeq for JsonbWriter<'a> {
+impl ser::SerializeSeq for JsonbWriter<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -301,7 +301,7 @@ impl<'a> ser::SerializeSeq for JsonbWriter<'a> {
     }
 }
 
-impl<'a> ser::SerializeTuple for JsonbWriter<'a> {
+impl ser::SerializeTuple for JsonbWriter<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -318,7 +318,7 @@ impl<'a> ser::SerializeTuple for JsonbWriter<'a> {
     }
 }
 
-impl<'a> ser::SerializeTupleStruct for JsonbWriter<'a> {
+impl ser::SerializeTupleStruct for JsonbWriter<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -364,7 +364,7 @@ impl<'a> EnumVariantSerializer<'a> {
     }
 }
 
-impl<'a> ser::SerializeTupleVariant for EnumVariantSerializer<'a> {
+impl ser::SerializeTupleVariant for EnumVariantSerializer<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -391,7 +391,7 @@ impl<'a> ser::SerializeTupleVariant for EnumVariantSerializer<'a> {
     }
 }
 
-impl<'a> ser::SerializeMap for JsonbWriter<'a> {
+impl ser::SerializeMap for JsonbWriter<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -413,7 +413,7 @@ impl<'a> ser::SerializeMap for JsonbWriter<'a> {
     }
 }
 
-impl<'a> ser::SerializeStruct for JsonbWriter<'a> {
+impl ser::SerializeStruct for JsonbWriter<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -433,7 +433,7 @@ impl<'a> ser::SerializeStruct for JsonbWriter<'a> {
     }
 }
 
-impl<'a> ser::SerializeStructVariant for EnumVariantSerializer<'a> {
+impl ser::SerializeStructVariant for EnumVariantSerializer<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -484,7 +484,7 @@ mod tests {
         let long_str = "x".repeat(repeats);
         assert_eq!(
             to_vec(&long_str).unwrap(),
-            [&expected_header[..], &long_str.as_bytes()].concat()
+            [expected_header, long_str.as_bytes()].concat()
         );
     }
 
@@ -523,8 +523,8 @@ mod tests {
         struct TupleStruct(String, f32);
 
         assert_eq!(
-            to_vec(&TupleStruct("hello".to_string(), 3.14)).unwrap(),
-            b"\xbb\x5ahello\x453.14"
+            to_vec(&TupleStruct("hello".to_string(), 3.25)).unwrap(),
+            b"\xbb\x5ahello\x453.25"
         );
     }
 
