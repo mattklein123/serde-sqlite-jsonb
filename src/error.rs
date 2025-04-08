@@ -1,5 +1,6 @@
 use serde::{de, ser};
 use std::fmt::{self, Display};
+use std::str::Utf8Error;
 
 use crate::header::ElementType;
 
@@ -15,7 +16,7 @@ pub enum Error {
     UnexpectedType(ElementType),
     Io(std::io::Error),
     TrailingCharacters,
-    Utf8(std::string::FromUtf8Error),
+    Utf8(Utf8Error),
     Empty,
 }
 
@@ -32,7 +33,7 @@ impl de::Error for Error {
 }
 
 impl Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Message(m) => write!(f, "{}", m),
             Error::JsonError(_) => write!(f, "json error"),
@@ -66,12 +67,6 @@ impl std::error::Error for Error {
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Error {
         Error::Io(err)
-    }
-}
-
-impl From<std::string::FromUtf8Error> for Error {
-    fn from(err: std::string::FromUtf8Error) -> Self {
-        Error::Utf8(err)
     }
 }
 

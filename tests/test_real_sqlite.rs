@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-
-use rusqlite::{Connection, DatabaseName};
+use rusqlite::Connection;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
@@ -49,35 +47,6 @@ fn test_fetch_json_object() -> rusqlite::Result<()> {
         }
     );
 
-    Ok(())
-}
-
-#[test]
-fn test_large_object_as_blob() -> rusqlite::Result<()> {
-    let conn = Connection::open_in_memory()?;
-    // Store a large json string as a jsonb blob in a table
-    conn.execute_batch(r#"
-    create table bigdata (
-        id integer primary key,
-        data blob
-    );
-    insert into bigdata (id, data) values (
-            42, -- the value of the integer primary key is the "rowid" in sqlite
-            jsonb_object(
-                'my long string', printf('%.*c', 10000000, 'x') -- 10Mb of 'x' characters
-            )
-    )"#,
-    )?;
-    let my_blob =
-        conn.blob_open(DatabaseName::Main, "bigdata", "data", 42, true)?;
-    let parsed: HashMap<String, String> =
-        serde_sqlite_jsonb::from_reader(my_blob).unwrap();
-    assert_eq!(
-        parsed,
-        [("my long string".into(), "x".repeat(10_000_000))]
-            .into_iter()
-            .collect()
-    );
     Ok(())
 }
 

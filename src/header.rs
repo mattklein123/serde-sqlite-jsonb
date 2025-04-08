@@ -43,17 +43,6 @@ pub struct Header {
     pub payload_size: usize,
 }
 
-impl Header {
-    /// Serialize the header into a byte array.
-    pub fn serialize(self) -> [u8; 9] {
-        let mut s = [0u8; 9];
-        s[0] = u8::from(self.element_type) | 0xF0;
-        let payload_size = self.payload_size.to_be_bytes();
-        s[1..].copy_from_slice(&payload_size);
-        s
-    }
-}
-
 impl std::convert::From<u8> for ElementType {
     fn from(value: u8) -> Self {
         match value & 0x0F {

@@ -8,7 +8,6 @@ edition = "2021"
 keywords = ["serde"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/lovasoa/serde-sqlite-jsonb"
-rust-version = "1.63"
 
 
 [dependencies]
@@ -16,6 +15,7 @@ serde = "1.0"
 # This crate depends EITHER on serde_json OR on serde_json5.
 serde_json = { version = "1", optional = true }
 serde_json5 = { version = "0.1", optional = true }
+bytes = "1.10.1"
 
 [features]
 default = ["serde_json"]

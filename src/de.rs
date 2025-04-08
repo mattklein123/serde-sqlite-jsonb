@@ -8,16 +8,17 @@
 
 use crate::error::{Error, Result};
 use crate::header::{ElementType, Header};
+use bytes::Buf;
 use serde::de::{self, Deserialize, IntoDeserializer, SeqAccess, Visitor};
-use std::io::Read;
+use std::str;
 
 /// A structure that deserializes SQLite JSONB data into Rust values.
-pub struct Deserializer<R: Read> {
+pub struct Deserializer<'a> {
     /// The reader that the deserializer reads from.
-    reader: R,
+    reader: &'a [u8],
 }
 
-impl<'a> Deserializer<&'a [u8]> {
+impl<'a> Deserializer<'a> {
     /// Deserialize an instance of type `T` from a byte slice of SQLite JSONB data.
     #[allow(clippy::should_implement_trait)]
     pub fn from_bytes(input: &'a [u8]) -> Self {
@@ -39,39 +40,16 @@ where
     }
 }
 
-/// Deserialize an instance of type `T` from a byte slice of SQLite JSONB data.
-pub fn from_reader<'a, R: Read, T>(reader: R) -> Result<T>
-where
-    T: Deserialize<'a>,
-{
-    let mut deserializer = Deserializer { reader };
-    let t = T::deserialize(&mut deserializer)?;
-    let Deserializer { mut reader } = deserializer;
-    if reader.read(&mut [0])? == 0 {
-        Ok(t)
-    } else {
-        Err(Error::TrailingCharacters)
-    }
-}
-
-impl<R: Read> Deserializer<R> {
-    fn with_header(&mut self, header: Header) -> Deserializer<impl Read + '_> {
-        // a little bit of a hack to "unread" a header that was already read
-        let header_bytes = std::io::Cursor::new(header.serialize());
-        let reader = header_bytes.chain(&mut self.reader);
-        Deserializer { reader }
-    }
-
+impl Deserializer<'_> {
     fn read_header(&mut self) -> Result<Header> {
         /*  The upper four bits of the first byte of the header determine
           - size of the header
           - and possibly also the size of the payload.
         */
-        let mut header_0 = [0u8; 1];
-        if self.reader.read(&mut header_0)? == 0 {
+        let Ok(header_0) = self.reader.try_get_u8() else {
             return Err(Error::Empty);
-        }
-        let first_byte = header_0[0];
+        };
+        let first_byte = header_0;
         let upper_four_bits = first_byte >> 4;
         /*
          If the upper four bits have a value between 0 and 11,
@@ -99,31 +77,30 @@ impl<R: Read> Deserializer<R> {
         } else {
             let mut buf = [0u8; 8];
             let start = 8 - bytes_to_read;
-            self.reader.read_exact(&mut buf[start..8])?;
+            self.reader
+                .try_copy_to_slice(&mut buf[start..8])
+                .map_err(|_| Error::Empty)?;
             usize::from_be_bytes(buf)
         };
-        Ok(Header {
+        let header = Header {
             element_type: ElementType::from(first_byte),
             payload_size,
-        })
+        };
+        Ok(header)
     }
 
     fn read_payload_string(&mut self, header: Header) -> Result<String> {
-        let mut str = String::with_capacity(header.payload_size);
-        let read = self.reader_with_limit(header)?.read_to_string(&mut str)?;
-        assert_eq!(read, header.payload_size);
-        Ok(str)
+        let data = self.advance_with_limit(header)?;
+        let string = str::from_utf8(data)
+            .map_err(|e| Error::Utf8(e))?
+            .to_string();
+        Ok(string)
     }
 
-    fn drop_payload(&mut self, header: Header) -> Result<ElementType> {
-        let mut remaining = header.payload_size;
-        while remaining > 0 {
-            let mut buf = [0u8; 256];
-            let len = buf.len().min(remaining);
-            self.reader.read_exact(&mut buf[..len])?;
-            remaining -= len;
-        }
-        Ok(header.element_type)
+    fn drop_payload(&mut self, header: Header) -> Result<()> {
+        self.check_size(&header)?;
+        self.reader.advance(header.payload_size);
+        Ok(())
     }
 
     fn read_bool(&mut self, header: Header) -> Result<bool> {
@@ -143,33 +120,33 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
-    fn reader_with_limit(&mut self, header: Header) -> Result<impl Read + '_> {
-        let limit =
-            u64::try_from(header.payload_size).map_err(usize_conversion)?;
-        Ok((&mut self.reader).take(limit))
+    fn check_size(&mut self, header: &Header) -> Result<()> {
+        if self.reader.len() < header.payload_size {
+            return Err(Error::Empty);
+        }
+        Ok(())
+    }
+
+    fn advance_with_limit(&mut self, header: Header) -> Result<&[u8]> {
+        self.check_size(&header)?;
+        let limited = &self.reader[..header.payload_size];
+        self.reader.advance(header.payload_size);
+        Ok(limited)
     }
 
     fn read_json_compatible<T>(&mut self, header: Header) -> Result<T>
     where
         for<'a> T: Deserialize<'a>,
     {
-        if header.payload_size <= 8 {
-            // micro-optimization: read small payloads into a stack buffer
-            let mut buf = [0u8; 8];
-            let smallbuf = &mut buf[..header.payload_size];
-            self.reader.read_exact(smallbuf)?;
-            Ok(crate::json::parse_json_slice(smallbuf)?)
-        } else {
-            let mut reader = self.reader_with_limit(header)?;
-            Ok(crate::json::parse_json(&mut reader)?)
-        }
+        let mut reader = self.advance_with_limit(header)?;
+        Ok(crate::json::parse_json(&mut reader)?)
     }
 
     fn read_json5_compatible<T>(&mut self, header: Header) -> Result<T>
     where
         for<'a> T: Deserialize<'a>,
     {
-        let mut reader = self.reader_with_limit(header)?;
+        let mut reader = self.advance_with_limit(header)?;
         Ok(crate::json::parse_json5(&mut reader)?)
     }
 
@@ -177,15 +154,15 @@ impl<R: Read> Deserializer<R> {
         &mut self,
         header: Header,
     ) -> Result<String> {
-        let mut reader = read_with_quotes(self.reader_with_limit(header)?);
-        Ok(crate::json::parse_json(&mut reader)?)
+        let reader = with_quotes(self.advance_with_limit(header)?);
+        Ok(crate::json::parse_json_slice(&reader)?)
     }
 
     fn read_json5_compatible_string(
         &mut self,
         header: Header,
     ) -> Result<String> {
-        let mut reader = read_with_quotes(self.reader_with_limit(header)?);
+        let mut reader = with_quotes(self.advance_with_limit(header)?);
         Ok(crate::json::parse_json5(&mut reader)?)
     }
 
@@ -280,15 +257,15 @@ impl<R: Read> Deserializer<R> {
     }
 }
 
-fn read_with_quotes(r: impl Read) -> impl Read {
-    b"\"".chain(r).chain(&b"\""[..])
+fn with_quotes(r: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(r.len() + 2);
+    v.push(b'"');
+    v.extend_from_slice(r);
+    v.push(b'"');
+    v
 }
 
-fn usize_conversion(e: std::num::TryFromIntError) -> Error {
-    Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-}
-
-impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
+impl<'de> de::Deserializer<'de> for &mut Deserializer<'_> {
     type Error = Error;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value>
@@ -296,7 +273,9 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
         V: Visitor<'de>,
     {
         let header = self.read_header()?;
-        self.deserialize_any_with_header(header, visitor)
+        let reader = self.advance_with_limit(header)?;
+        let mut seq_deser = Deserializer { reader };
+        seq_deser.deserialize_any_with_header(header, visitor)
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value>
@@ -375,12 +354,13 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: Visitor<'de>,
     {
+        let existing_data = self.reader;
         let header = self.read_header()?;
         if header.element_type == ElementType::Null {
             visitor.visit_none()
         } else {
-            let mut deser = self.with_header(header);
-            visitor.visit_some(&mut deser)
+            self.reader = existing_data;
+            visitor.visit_some(self)
         }
     }
 
@@ -420,7 +400,7 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
         V: Visitor<'de>,
     {
         let head = self.read_header()?;
-        let reader = self.reader_with_limit(head)?;
+        let reader = self.advance_with_limit(head)?;
         let mut seq_deser = Deserializer { reader };
         visitor.visit_seq(&mut seq_deser)
     }
@@ -449,7 +429,7 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
         V: Visitor<'de>,
     {
         let head = self.read_header()?;
-        let reader = self.reader_with_limit(head)?;
+        let reader = self.advance_with_limit(head)?;
         let mut seq_deser = Deserializer { reader };
         visitor.visit_map(&mut seq_deser)
     }
@@ -485,10 +465,10 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
                 visitor.visit_enum(s.into_deserializer())
             }
             ElementType::Object => {
-                let reader = self.reader_with_limit(header)?;
+                let reader = self.advance_with_limit(header)?;
                 let mut de = Deserializer { reader };
                 let r = visitor.visit_enum(&mut de);
-                if de.reader.read(&mut [0])? == 0 {
+                if de.reader.is_empty() {
                     r
                 } else {
                     Err(Error::TrailingCharacters)
@@ -575,7 +555,7 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
     }
 }
 
-impl<'de, R: Read> de::SeqAccess<'de> for &mut Deserializer<R> {
+impl<'de> de::SeqAccess<'de> for &mut Deserializer<'_> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
@@ -590,7 +570,7 @@ impl<'de, R: Read> de::SeqAccess<'de> for &mut Deserializer<R> {
     }
 }
 
-impl<'de, R: Read> de::MapAccess<'de> for &mut Deserializer<R> {
+impl<'de> de::MapAccess<'de> for &mut Deserializer<'_> {
     type Error = Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>>
@@ -609,7 +589,7 @@ impl<'de, R: Read> de::MapAccess<'de> for &mut Deserializer<R> {
     }
 }
 
-impl<'de, R: Read> de::EnumAccess<'de> for &mut Deserializer<R> {
+impl<'de> de::EnumAccess<'de> for &mut Deserializer<'_> {
     type Error = Error;
     type Variant = Self;
 
@@ -622,7 +602,7 @@ impl<'de, R: Read> de::EnumAccess<'de> for &mut Deserializer<R> {
     }
 }
 
-impl<'de, R: Read> de::VariantAccess<'de> for &mut Deserializer<R> {
+impl<'de> de::VariantAccess<'de> for &mut Deserializer<'_> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<()> {
@@ -748,12 +728,12 @@ mod tests {
     #[test]
     fn test_decoding_large_int() {
         assert_eq!(
-            from_slice::<u64>(b"\xc3\xf418446744073709551615").unwrap(),
+            from_slice::<u64>(b"\xc3\x1418446744073709551615").unwrap(),
             18446744073709551615
         );
         // large negative i64
         assert_eq!(
-            from_slice::<i64>(b"\xc3\xf5-9223372036854775808").unwrap(),
+            from_slice::<i64>(b"\xc3\x14-9223372036854775808").unwrap(),
             -9223372036854775808
         );
     }
@@ -835,11 +815,6 @@ mod tests {
                 .unwrap(),
             vec![Some("1234".to_string()), None, Some("5678".to_string())]
         );
-    }
-
-    #[test]
-    fn test_vec_with_reader() {
-        assert_eq!(from_reader::<_, Vec<()>>(&b"\x0b"[..]).unwrap(), vec![]);
     }
 
     #[test]
